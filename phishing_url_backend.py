@@ -1,4 +1,6 @@
-from flask import Flask, request
+# phishing_url.py
+
+from flask import Flask, request, jsonify
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -9,8 +11,26 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn.linear_model import SGDClassifier
 import re
+import mysql.connector
+from mysql.connector import pooling
+from datetime import datetime
 
 app = Flask(__name__)
+
+# Database configuration
+db_config = {
+    "host": "sql12.freesqldatabase.com",
+    "user": "sql12714674",
+    "password": "15cCYtDhUC",
+    "database": "sql12714674"
+}
+
+connection_pool = mysql.connector.pooling.MySQLConnectionPool(
+    pool_name="mypool",
+    pool_size=5,
+    **db_config
+)
+
 
 # Load the data for training
 data = pd.read_csv('phishing2.csv')
@@ -69,11 +89,41 @@ def predict_phishing_url():
     url = request.form['url']
     url = preprocess_url(url)
     prediction = pipeline.predict([url])[0]
-    if prediction == 1:
-        result = 'Phishing URL'
-    else:
-        result = 'Safe URL'
+    result = 'Phishing URL' if prediction == 1 else 'Safe URL'
+
+    # Store the prediction in the database
+    connection = connection_pool.get_connection()
+    cursor = connection.cursor()
+    try:
+        query = "INSERT INTO phishing_url_predictions (url, result, created_at) VALUES (%s, %s, %s)"
+        values = (url, result, datetime.now())
+        cursor.execute(query, values)
+        connection.commit()
+    except mysql.connector.Error as err:
+        print(f"Error: {err}")
+    finally:
+        cursor.close()
+        connection.close()
+
     return result
+
+@app.route('/phishing/history', methods=['GET'])
+def get_phishing_url_history():
+    connection = connection_pool.get_connection()
+    cursor = connection.cursor(dictionary=True)
+    try:
+        query = "SELECT url, result, created_at FROM phishing_url_predictions ORDER BY created_at DESC LIMIT 50"
+        cursor.execute(query)
+        history = cursor.fetchall()
+        for item in history:
+            item['created_at'] = item['created_at'].strftime("%Y-%m-%d %H:%M:%S")
+        return jsonify(history)
+    except mysql.connector.Error as err:
+        print(f"Error: {err}")
+        return jsonify([])
+    finally:
+        cursor.close()
+        connection.close()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10002, debug=False)
